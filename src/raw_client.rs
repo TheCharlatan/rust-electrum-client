@@ -478,6 +478,7 @@ impl<S: Read + Write> RawClient<S> {
                 // Loop over every message
                 loop {
                     raw_resp.clear();
+                    debug!("looping receiver");
 
                     if let Err(e) = reader.read_line(&mut raw_resp) {
                         let error = Arc::new(e);
@@ -543,9 +544,11 @@ impl<S: Read + Write> RawClient<S> {
                         None => {
                             // No id, that's probably a notification.
                             let mut resp = resp;
+                            info!("this is a notification");
 
                             if let Some(ref method) = resp["method"].take().as_str() {
                                 self.handle_notification(method, resp["params"].take())?;
+                                debug!("notification handled");
                             } else {
                                 warn!("Unexpected response: {:?}", resp);
                             }
@@ -586,6 +589,8 @@ impl<S: Read + Write> RawClient<S> {
 
         self.increment_calls();
 
+        info!("waiting for receive");
+
         let mut resp = match self.recv(&receiver, req.id) {
             Ok(resp) => resp,
             e @ Err(_) => {
@@ -595,6 +600,7 @@ impl<S: Read + Write> RawClient<S> {
                 return e;
             }
         };
+        info!("response: {:?}", resp);
         Ok(resp["result"].take())
     }
 
@@ -606,7 +612,9 @@ impl<S: Read + Write> RawClient<S> {
         loop {
             // Try to take the lock on the reader. If we manage to do so, we'll become the reader
             // thread until we get our reponse
-            match self._reader_thread(Some(req_id)) {
+            let res = self._reader_thread(Some(req_id));
+            info!("recv: {:?}", res);
+            match res {
                 Ok(response) => break Ok(response),
                 Err(Error::CouldntLockReader) => {
                     match receiver.recv()? {
@@ -811,6 +819,7 @@ impl<T: Read + Write> ElectrumApi for RawClient<T> {
     }
 
     fn script_subscribe(&self, script: &Script) -> Result<Option<ScriptStatus>, Error> {
+        info!("script hash subscribe");
         let script_hash = script.to_electrum_scripthash();
         let mut script_notifications = self.script_notifications.lock()?;
 
@@ -819,6 +828,7 @@ impl<T: Read + Write> ElectrumApi for RawClient<T> {
         }
 
         script_notifications.insert(script_hash, VecDeque::new());
+        drop(script_notifications);
 
         let req = Request::new_id(
             self.last_id.fetch_add(1, Ordering::SeqCst),
@@ -826,6 +836,7 @@ impl<T: Read + Write> ElectrumApi for RawClient<T> {
             vec![Param::String(script_hash.to_hex())],
         );
         let value = self.call(req)?;
+        info!("value: {:?}", value);
 
         Ok(serde_json::from_value(value)?)
     }
